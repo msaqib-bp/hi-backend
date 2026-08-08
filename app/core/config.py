@@ -188,7 +188,37 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        """Allowed browser origins, normalised to the form the browser actually sends.
+
+        ``CORSMiddleware`` compares against the ``Origin`` header by exact string, and a
+        browser never includes a trailing slash or a path — it sends scheme, host and
+        port only. But the value people paste comes from the address bar, where it
+        *does* have a trailing slash (``https://app.vercel.app/``). Left alone that
+        never matches, and the failure gives no clue why: the request succeeds on the
+        server and the browser silently discards the response for want of an
+        ``access-control-allow-origin`` header.
+        """
+        origins: list[str] = []
+        for raw in self.CORS_ORIGINS.split(","):
+            origin = raw.strip().rstrip("/")
+            if origin and origin not in origins:
+                origins.append(origin)
+        return origins
+
+    @property
+    def cors_is_probably_misconfigured(self) -> bool:
+        """True when a deployed instance would reject every real browser.
+
+        The default only lists ``localhost``, which is correct for development and
+        useless in production — so a deployment that never had ``CORS_ORIGINS`` set
+        blocks its own frontend entirely.
+        """
+        if not self.is_production:
+            return False
+        return all(
+            origin.startswith(("http://localhost", "http://127.0.0.1"))
+            for origin in self.cors_origin_list
+        )
 
     @property
     def is_production(self) -> bool:

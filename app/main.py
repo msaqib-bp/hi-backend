@@ -43,7 +43,22 @@ async def lifespan(app: FastAPI):
         "application_starting",
         environment=settings.ENVIRONMENT,
         version=settings.APP_VERSION,
+        # Logged because a CORS rejection is invisible from the server's side: the
+        # request runs and returns 200, and only the browser discards the response.
+        # Without this line the allowed list can only be discovered by guessing.
+        cors_origins=settings.cors_origin_list,
     )
+    if settings.cors_is_probably_misconfigured:
+        log.warning(
+            "cors_origins_not_configured",
+            allowed=settings.cors_origin_list,
+            hint=(
+                "Only localhost is allowed, so every browser request from the deployed "
+                "frontend will be blocked. Set CORS_ORIGINS to the site's origin — "
+                "scheme and host only, e.g. https://your-app.vercel.app (no trailing "
+                "slash, no path)."
+            ),
+        )
 
     # On SQLite (local dev and tests) create tables directly. Production runs Alembic
     # migrations in the deploy step, so this is a no-op there beyond a metadata check.

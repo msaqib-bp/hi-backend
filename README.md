@@ -474,7 +474,8 @@ complaint on restart.
 | `prepared statement "__asyncpg_stmt_1__" does not exist`, intermittently | Transaction pooler with statement caching on | Should no longer occur on `-pooler` hosts; otherwise switch to the direct endpoint |
 | App crashes at startup with a `SECRET_KEY` validation error | `ENVIRONMENT=production` with a short or default signing key | Let Render generate it (`generateValue: true`), or set 32+ random bytes |
 | `/health` reports `"ml_loaded": false` | Model artifacts missing from the repo | They are committed under `app/ml/artifacts/`; check they were not gitignored |
-| Frontend loads but every request fails | `CORS_ORIGINS` does not include the Vercel URL | Set it on Render and redeploy |
+| Frontend loads but every request fails, browser console says CORS | `CORS_ORIGINS` does not include the site's origin | Set it on Render to the origin — scheme and host only. A trailing slash is tolerated; a path is not. Startup logs `cors_origins=[…]`, and warns `cors_origins_not_configured` when production still allows only localhost |
+| Requests fail in the browser but the same call works from `curl` | Same as above — a CORS rejection is invisible server-side | The request really does run and return 200; only the browser discards the response for want of `access-control-allow-origin`. Check the startup log line, not the request log |
 | First request after idle takes ~50s | Free instance cold start | Hit `/health` before demoing |
 
 ---
