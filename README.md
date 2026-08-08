@@ -416,6 +416,17 @@ app and Alembic read the same `settings.DATABASE_URL`, so one rule covers both.
 `tests/test_database_url.py` asserts the resulting kwargs against `asyncpg.connect`'s
 live signature, so the check stays honest across driver upgrades.
 
+**Hardening the connection (optional).** Neon hands you `sslmode=require`, which asyncpg
+implements with `verify_mode = CERT_NONE` — encrypted, but the certificate is never
+checked, so an attacker able to intercept the route could present any certificate at all.
+Changing that one parameter to `sslmode=verify-full` closes the gap and costs nothing;
+Neon's certificate is issued by Let's Encrypt and validates against the system trust
+store. `DatabaseManager` supplies that trust store, because asyncpg otherwise resolves
+`verify-ca`/`verify-full` against `~/.postgresql/root.crt` and raises when the file is
+absent — which on a container it always is, leaving the *strongest* setting as the only
+one that cannot boot. Verified against Neon: all three modes connect, and the verifying
+context rejects hostname mismatches, self-signed and expired certificates.
+
 **Pooled vs direct endpoint.** Neon and Supabase both offer two, and show the pooled one
 first. Either works: [`DatabaseManager`](app/db/session.py) detects the `-pooler` host and
 disables asyncpg's prepared-statement cache, which PgBouncer's transaction mode would

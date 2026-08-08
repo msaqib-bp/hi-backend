@@ -23,6 +23,7 @@ list, so it keeps telling the truth when the driver is upgraded.
 from __future__ import annotations
 
 import inspect
+import ssl
 
 import asyncpg
 import pytest
@@ -30,7 +31,11 @@ from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 from sqlalchemy.engine.url import make_url
 
 from app.core.config import Settings, normalise_database_url
-from app.db.session import _uses_transaction_pooler
+from app.db.session import (
+    DatabaseManager,
+    _certificate_verifying_context,
+    _uses_transaction_pooler,
+)
 
 #: The exact strings these providers put on their dashboards.
 NEON_DIRECT = (
@@ -114,6 +119,69 @@ class TestPoolerDetection:
     @pytest.mark.parametrize("url", [NEON_DIRECT, RENDER_LEGACY])
     def test_direct_endpoints_are_not(self, url: str) -> None:
         assert _uses_transaction_pooler(normalise_database_url(url)) is False
+
+
+class TestCertificateVerification:
+    """``verify-ca``/``verify-full`` must not need a certificate file on disk.
+
+    asyncpg resolves those modes against ``~/.postgresql/root.crt`` and raises when it is
+    missing, which on a container it always is. Left alone, the strongest setting is the
+    one that cannot boot — and the fallback, ``require``, connects with
+    ``verify_mode = CERT_NONE``, so it encrypts without authenticating anything.
+    """
+
+    @pytest.mark.parametrize("mode", ["disable", "prefer", "require"])
+    def test_non_verifying_modes_are_left_to_asyncpg(self, mode: str) -> None:
+        url = f"postgresql+asyncpg://u:p@host/db?ssl={mode}"
+        assert _certificate_verifying_context(url) is None
+
+    def test_verify_ca_checks_the_chain_but_not_the_hostname(self) -> None:
+        context = _certificate_verifying_context(
+            "postgresql+asyncpg://u:p@host/db?ssl=verify-ca"
+        )
+        assert context is not None
+        assert context.verify_mode is ssl.CERT_REQUIRED
+        assert context.check_hostname is False
+
+    def test_verify_full_checks_the_hostname_too(self) -> None:
+        context = _certificate_verifying_context(
+            "postgresql+asyncpg://u:p@host/db?ssl=verify-full"
+        )
+        assert context is not None
+        assert context.verify_mode is ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+
+    def test_the_context_trusts_a_public_ca(self) -> None:
+        """Managed providers use public certificates — Neon's is Let's Encrypt."""
+        context = _certificate_verifying_context(
+            "postgresql+asyncpg://u:p@host/db?ssl=verify-full"
+        )
+        assert context is not None
+        assert context.get_ca_certs(), "system trust store was not loaded"
+
+    def test_the_context_overrides_the_url(self) -> None:
+        """The URL still says ``ssl=verify-full``, and asyncpg would act on that string
+        by looking for ``root.crt``. The context must reach ``connect_args``, which
+        SQLAlchemy merges over the query parameters."""
+        url = normalise_database_url(NEON_DIRECT.replace("sslmode=require", "sslmode=verify-full"))
+        manager = DatabaseManager(url)
+        assert isinstance(manager.connect_args.get("ssl"), ssl.SSLContext)
+
+    def test_require_adds_no_override(self) -> None:
+        manager = DatabaseManager(normalise_database_url(NEON_DIRECT))
+        assert "ssl" not in manager.connect_args
+
+    def test_pooled_and_verifying_settings_combine(self) -> None:
+        """A pooled endpoint with verification on needs *both* adjustments, not one.
+
+        These are set on different branches, so it would be easy for one to overwrite
+        the other's ``connect_args``.
+        """
+        url = normalise_database_url(NEON_POOLED.replace("sslmode=require", "sslmode=verify-full"))
+        manager = DatabaseManager(url)
+        assert manager.is_pooled is True
+        assert isinstance(manager.connect_args.get("ssl"), ssl.SSLContext)
+        assert manager.connect_args["statement_cache_size"] == 0
 
 
 class TestEveryKwargIsAcceptedByTheDriver:
