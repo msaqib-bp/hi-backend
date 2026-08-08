@@ -29,7 +29,13 @@ from app.ml.constants import (
     SIMILARITY_MODEL_FILE,
 )
 from app.ml.lexicon import blend_scores, matched_terms
-from app.ml.preprocess import URGENCY_TERMS, clean_text, extract_keywords, split_sentences
+from app.ml.preprocess import (
+    URGENCY_TERMS,
+    clean_text,
+    extract_keywords,
+    split_sentences,
+    tidy_sentence,
+)
 from app.models.enums import AIEngine, ComplaintCategory, ComplaintPriority
 from app.services.ai.base import AIAnalyzer, AIResult, Prediction
 
@@ -182,12 +188,9 @@ class MLAnalyzer(AIAnalyzer):
         """
         sentences = split_sentences(description)
         core = max(enumerate(sentences), key=self._sentence_score)[1] if sentences else description
+        core = tidy_sentence(core)
 
-        core = core.strip().rstrip(".")
-        if len(core) > 150:
-            core = core[:147].rsplit(" ", 1)[0] + "…"
-
-        where = f" at {location}" if location else ""
+        where = f" at {location.strip()}" if location and location.strip() else ""
         return f"{priority.label} priority {category.label.lower()} issue{where}: {core}."
 
     @staticmethod

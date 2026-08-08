@@ -262,3 +262,70 @@ class TestTrainedModels:
     async def test_empty_ish_input_does_not_crash(self, analyzer) -> None:
         result = await analyzer.analyze("problem")
         assert result.category in list(ComplaintCategory)
+
+
+class TestSummaryFormatting:
+    """Regression tests for summaries that reach a citizen's screen.
+
+    Complaints arrive pasted from chat apps and email, so trailing quotes and stray
+    punctuation are normal input, not edge cases.
+    """
+
+    @pytest.fixture(scope="class")
+    def analyzer(self):
+        from app.services.ai.ml_analyzer import MLAnalyzer
+
+        return MLAnalyzer()
+
+    @requires_model
+    async def test_trailing_quote_does_not_survive_into_the_summary(self, analyzer) -> None:
+        """Reported from a real submission: a description ending in `."` produced
+        `...becoming difficult.".` — a stray quote and a doubled period."""
+        result = await analyzer.analyze(
+            'There is a large water leak near the main road and traffic is becoming difficult."',
+            location="hyderabad",
+        )
+        assert '."' not in result.summary
+        assert ".." not in result.summary
+        assert result.summary.endswith(".")
+
+    @requires_model
+    async def test_fully_quoted_complaint_is_unwrapped(self, analyzer) -> None:
+        result = await analyzer.analyze('"The drain near the market is completely blocked."')
+        assert not result.summary.split(": ", 1)[-1].startswith('"')
+
+    @requires_model
+    async def test_blank_location_produces_no_dangling_preposition(self, analyzer) -> None:
+        result = await analyzer.analyze("The streetlight has been off for two weeks.", "   ")
+        assert " at :" not in result.summary
+        assert " at ." not in result.summary
+
+
+class TestSentenceTidier:
+    """Unit-level checks for the shared cleaner."""
+
+    def test_strips_trailing_punctuation_and_quotes(self) -> None:
+        from app.ml.preprocess import tidy_sentence
+
+        assert tidy_sentence('Water is leaking badly."') == "Water is leaking badly"
+        assert tidy_sentence("Water is leaking badly...") == "Water is leaking badly"
+        assert tidy_sentence("Water is leaking badly!?") == "Water is leaking badly"
+
+    def test_unwraps_a_fully_quoted_sentence(self) -> None:
+        from app.ml.preprocess import tidy_sentence
+
+        assert tidy_sentence('"Water is leaking badly."') == "Water is leaking badly"
+
+    def test_truncates_on_a_word_boundary(self) -> None:
+        from app.ml.preprocess import tidy_sentence
+
+        long_text = "word " * 60
+        out = tidy_sentence(long_text, max_length=40)
+        assert len(out) <= 40
+        assert out.endswith("…")
+
+    def test_handles_empty_input(self) -> None:
+        from app.ml.preprocess import tidy_sentence
+
+        assert tidy_sentence("") == ""
+        assert tidy_sentence("   ") == ""

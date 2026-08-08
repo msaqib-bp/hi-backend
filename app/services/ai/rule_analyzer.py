@@ -23,6 +23,7 @@ from app.ml.preprocess import (
     clean_text,
     extract_keywords,
     split_sentences,
+    tidy_sentence,
 )
 from app.models.enums import AIEngine, ComplaintCategory, ComplaintPriority
 from app.services.ai.base import AIAnalyzer, AIResult, Prediction
@@ -54,10 +55,8 @@ class RuleAnalyzer(AIAnalyzer):
         priority, priority_confidence = self._prioritize(tokens)
 
         sentences = split_sentences(description)
-        core = (sentences[0] if sentences else description).strip().rstrip(".")
-        if len(core) > 150:
-            core = core[:147].rsplit(" ", 1)[0] + "…"
-        where = f" at {location}" if location else ""
+        core = tidy_sentence(sentences[0] if sentences else description)
+        where = f" at {location.strip()}" if location and location.strip() else ""
 
         return AIResult(
             category=category,

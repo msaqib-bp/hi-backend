@@ -229,6 +229,36 @@ def extract_keywords(text: str, limit: int = 6) -> list[str]:
     return [token for token, _ in ranked[:limit]]
 
 
+#: Characters that may trail a quoted or copy-pasted sentence. Stripping only "." leaves
+#: artefacts like ``difficult."`` which then gain a second period from the summary
+#: template, rendering as ``difficult.".``
+_TRAILING_NOISE = ".,;:!?\"'”’)]… \t\n\r"
+
+
+def tidy_sentence(text: str, max_length: int = 150) -> str:
+    """Clean a sentence for use inside a generated summary.
+
+    Strips surrounding quotes and trailing punctuation so the caller can append its own
+    terminator without producing doubled or orphaned marks, collapses internal
+    whitespace, and truncates on a word boundary.
+
+    Real input this handles: a complaint pasted from a chat app arrives as
+    ``There is a large water leak ... becoming difficult."`` — the stray quote used to
+    survive into the dispatch summary.
+    """
+    cleaned = _WHITESPACE_RE.sub(" ", (text or "").strip())
+    cleaned = cleaned.strip(_TRAILING_NOISE)
+
+    # A fully-quoted sentence loses its opening quote too, now that the closing one
+    # is gone.
+    while cleaned[:1] in {'"', "'", "“", "‘", "(", "["}:
+        cleaned = cleaned[1:].strip()
+
+    if len(cleaned) > max_length:
+        cleaned = cleaned[: max_length - 1].rsplit(" ", 1)[0].strip(_TRAILING_NOISE) + "…"
+    return cleaned
+
+
 def split_sentences(text: str) -> list[str]:
     """Naive sentence splitter — good enough for extractive summarisation."""
     parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
