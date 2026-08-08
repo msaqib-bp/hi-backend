@@ -31,7 +31,8 @@ from app.models.enums import (
 )
 from app.models.status_event import StatusEvent
 from app.models.user import User
-from app.services.ai.pipeline import get_ai_pipeline
+from app.services.ai.llm_shared import NullLLM
+from app.services.ai.pipeline import AIPipeline, get_ai_pipeline
 
 log = get_logger(__name__)
 
@@ -188,7 +189,23 @@ async def seed_demo_complaints(session: AsyncSession, count: int | None = None) 
 
     target = count if count is not None else settings.SEED_COMPLAINT_COUNT
     departments = await seed_departments(session)
-    pipeline = get_ai_pipeline()
+
+    # Seed with the ML engine ONLY — never the LLM.
+    #
+    # Seeding runs inside the startup lifespan, so nothing binds a port until it
+    # finishes. An LLM summary costs ~1.7s per complaint, so 180 of them is ~5 minutes
+    # of dead air: Render logs "No open HTTP ports detected" and can fail the deploy.
+    # It also spends 180 paid API calls on throwaway demo data on *every* boot, and a
+    # free instance that sleeps after 15 minutes idle boots often.
+    #
+    # The ML engine does the same job here in ~10ms per complaint. Live submissions are
+    # unaffected and still get the LLM summary — this is bulk backfill, not user traffic.
+    live_pipeline = get_ai_pipeline()
+    pipeline = AIPipeline(
+        ml_analyzer=live_pipeline.ml,  # reuse the already-loaded models
+        llm_analyzer=NullLLM(),
+        use_llm_for_summary=False,
+    )
 
     # Fixed seed: the same demo dataset every deploy, so screenshots and the demo script
     # stay consistent between runs.
