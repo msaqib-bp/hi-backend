@@ -390,3 +390,22 @@ class TestAIEndpoints:
         response = await client.get(f"{API}/departments")
         assert response.status_code == 200
         assert len(response.json()) == 7
+
+
+class TestUptimeProbes:
+    """Uptime monitors and Render's platform checker probe with HEAD, not GET.
+
+    A 405 there makes a healthy service look down — and an uptime pinger is the usual
+    way to stop a free-tier instance sleeping before a demo.
+    """
+
+    @pytest.mark.parametrize("path", ["/", "/health"])
+    async def test_head_is_allowed(self, client: AsyncClient, path: str) -> None:
+        response = await client.head(path)
+        assert response.status_code == 200, f"HEAD {path} returned {response.status_code}"
+
+    @pytest.mark.parametrize("path", ["/", "/health"])
+    async def test_get_still_returns_a_body(self, client: AsyncClient, path: str) -> None:
+        response = await client.get(path)
+        assert response.status_code == 200
+        assert response.json()

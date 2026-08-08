@@ -132,7 +132,11 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
-    @app.get("/", tags=["meta"], summary="Service metadata")
+    # GET *and* HEAD. FastAPI does not add HEAD alongside GET, and Render's platform
+    # checker — like most uptime monitors — probes with HEAD, which was answering 405.
+    # That matters here beyond tidiness: an uptime pinger is the usual way to stop a
+    # free instance sleeping before a demo, and a 405 makes it report the service down.
+    @app.api_route("/", methods=["GET", "HEAD"], tags=["meta"], summary="Service metadata")
     async def root() -> JSONResponse:
         pipeline = get_ai_pipeline()
         return JSONResponse(
@@ -146,7 +150,9 @@ def create_app() -> FastAPI:
             }
         )
 
-    @app.get("/health", tags=["meta"], summary="Health check")
+    @app.api_route(
+        "/health", methods=["GET", "HEAD"], tags=["meta"], summary="Health check"
+    )
     async def health() -> JSONResponse:
         """Liveness probe for Render. Verifies the database round-trips."""
         from sqlalchemy import text
