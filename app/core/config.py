@@ -9,12 +9,79 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # -> backend/app
 PROJECT_ROOT = BASE_DIR.parent  # -> backend/
+
+#: Connection parameters that ``libpq`` (and therefore psycopg) understands but
+#: ``asyncpg`` does not accept at all.
+#:
+#: This matters because managed Postgres vendors bake them into the connection string
+#: they hand you, and SQLAlchemy's asyncpg dialect forwards *every* query parameter to
+#: ``asyncpg.connect()`` as a keyword argument. Neon's string ends with
+#: ``?sslmode=require&channel_binding=require``; pasted as-is that raises
+#:
+#:     TypeError: connect() got an unexpected keyword argument 'sslmode'
+#:
+#: on the first connection — during ``alembic upgrade head``, not at import — which
+#: reads like a database outage rather than a URL problem. Dropping them here means any
+#: vendor's copy-pasted URL works unedited.
+#:
+#: ``sslmode`` is deliberately absent: it is translated rather than dropped, because
+#: discarding it would silently downgrade an encrypted connection.
+_LIBPQ_ONLY_PARAMS = frozenset(
+    {
+        "channel_binding",
+        "connect_timeout",
+        "gssencmode",
+        "options",
+        "sslcert",
+        "sslcrl",
+        "sslkey",
+        "sslrootcert",
+        "target_session_attrs",
+    }
+)
+
+
+def normalise_database_url(value: str) -> str:
+    """Rewrite any Postgres URL into one SQLAlchemy + asyncpg can actually open.
+
+    Handles the three shapes real providers emit:
+
+    * ``postgres://…``    — Render and Heroku's legacy scheme
+    * ``postgresql://…``  — Neon, Supabase, and the JDBC-ish standard
+    * ``postgresql+asyncpg://…`` — already correct, left alone
+
+    and strips or translates the libpq-only query parameters listed in
+    ``_LIBPQ_ONLY_PARAMS``. Non-Postgres URLs (the SQLite default) pass through
+    untouched.
+    """
+    if value.startswith("postgres://"):
+        value = value.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif value.startswith("postgresql://"):
+        value = value.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    if not value.startswith("postgresql+asyncpg://") or "?" not in value:
+        return value
+
+    parts = urlsplit(value)
+    kept: list[tuple[str, str]] = []
+    for key, param in parse_qsl(parts.query, keep_blank_values=True):
+        lowered = key.lower()
+        if lowered == "sslmode":
+            # asyncpg spells this ``ssl`` and accepts the same vocabulary
+            # (disable/allow/prefer/require/verify-ca/verify-full), so the intent
+            # survives the rename.
+            kept.append(("ssl", param))
+        elif lowered not in _LIBPQ_ONLY_PARAMS:
+            kept.append((key, param))
+
+    return urlunsplit(parts._replace(query=urlencode(kept)))
 
 
 class Settings(BaseSettings):
@@ -97,12 +164,8 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL")
     @classmethod
     def _normalise_database_url(cls, value: str) -> str:
-        """Render hands out ``postgres://`` URLs; SQLAlchemy needs an async driver."""
-        if value.startswith("postgres://"):
-            value = value.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif value.startswith("postgresql://"):
-            value = value.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return value
+        """Accept any provider's Postgres URL verbatim. See ``normalise_database_url``."""
+        return normalise_database_url(value)
 
     @field_validator("SECRET_KEY")
     @classmethod

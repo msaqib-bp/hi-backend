@@ -389,6 +389,40 @@ Notes on the free tier:
 
 A [`Dockerfile`](Dockerfile) is included for Railway / Fly.io / Cloud Run.
 
+### External PostgreSQL (Neon, Supabase, …)
+
+Any hosted Postgres works, and it is the fastest way to give an already-running Render
+service a real database — no Blueprint, no redeploy, no service to recreate:
+
+1. Create a project at [neon.tech](https://neon.tech) (free tier; unlike Render's free
+   database it does not expire after 30 days).
+2. Copy the connection string.
+3. Render → your service → **Environment** → set `DATABASE_URL` to it → **Save**.
+
+The service restarts, `alembic upgrade head` builds the schema, and the demo data seeds
+on first boot. **Paste the string exactly as the provider prints it** — including
+`?sslmode=require&channel_binding=require`. Editing it is what breaks it.
+
+Why the app can accept it verbatim: SQLAlchemy's asyncpg dialect forwards every query
+parameter to `asyncpg.connect()` as a keyword argument, and asyncpg accepts none of
+libpq's spellings — an unedited Neon URL would raise `TypeError: connect() got an
+unexpected keyword argument 'sslmode'` on the first connection, i.e. *inside the
+migration step*, hundreds of lines after the config parsed cleanly.
+[`normalise_database_url`](app/core/config.py) therefore rewrites the scheme, translates
+`sslmode` to asyncpg's `ssl` (translated, never dropped — dropping it would silently
+downgrade the connection to plaintext), and strips the libpq-only parameters. Both the
+app and Alembic read the same `settings.DATABASE_URL`, so one rule covers both.
+
+`tests/test_database_url.py` asserts the resulting kwargs against `asyncpg.connect`'s
+live signature, so the check stays honest across driver upgrades.
+
+**Pooled vs direct endpoint.** Neon and Supabase both offer two, and show the pooled one
+first. Either works: [`DatabaseManager`](app/db/session.py) detects the `-pooler` host and
+disables asyncpg's prepared-statement cache, which PgBouncer's transaction mode would
+otherwise break with `prepared statement "__asyncpg_stmt_1__" does not exist` — an error
+that appears only intermittently, under load. The direct endpoint is marginally faster
+here, since the app keeps its own small connection pool.
+
 ### The `your_application` shim
 
 Render's placeholder start command, `gunicorn your_application.wsgi`, is what a service
@@ -415,6 +449,9 @@ complaint on restart.
 |---|---|---|
 | `ModuleNotFoundError: No module named 'your_application'` | Created as a Web Service, so `render.yaml` was ignored | Should no longer occur — `your_application/wsgi.py` resolves the placeholder command (see below). Still worth fixing the start command properly. |
 | Log shows `started_via_compatibility_shim` | Running on Render's placeholder start command | Works, but set the start command or redeploy as a Blueprint — otherwise there is no PostgreSQL and data is lost on every restart |
+| Every complaint disappears after a restart | No `DATABASE_URL`, so the app fell back to SQLite on an ephemeral disk | Point `DATABASE_URL` at a Neon (or Render) Postgres — see [External PostgreSQL](#external-postgresql-neon-supabase-) |
+| `TypeError: connect() got an unexpected keyword argument 'sslmode'` | A Postgres URL reached asyncpg without normalisation | Should no longer occur. If it does, the URL was hand-edited into an unusual shape — paste the provider's string verbatim |
+| `prepared statement "__asyncpg_stmt_1__" does not exist`, intermittently | Transaction pooler with statement caching on | Should no longer occur on `-pooler` hosts; otherwise switch to the direct endpoint |
 | App crashes at startup with a `SECRET_KEY` validation error | `ENVIRONMENT=production` with a short or default signing key | Let Render generate it (`generateValue: true`), or set 32+ random bytes |
 | `/health` reports `"ml_loaded": false` | Model artifacts missing from the repo | They are committed under `app/ml/artifacts/`; check they were not gitignored |
 | Frontend loads but every request fails | `CORS_ORIGINS` does not include the Vercel URL | Set it on Render and redeploy |
