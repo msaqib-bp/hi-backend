@@ -54,6 +54,12 @@ class AIResult:
     engine: AIEngine
     model_version: str
 
+    #: Which vendor produced this result — "local" for the scikit-learn models,
+    #: "anthropic" / "deepseek" for a language model. `engine` says *what kind* of
+    #: engine ran; this says *whose*, so the UI can name it precisely and an operator
+    #: can tell at a glance whether a complaint was triaged on-server or off.
+    provider: str = "local"
+
     category_confidence: float = 0.0
     priority_confidence: float = 0.0
     category_alternatives: list[Prediction] = field(default_factory=list)

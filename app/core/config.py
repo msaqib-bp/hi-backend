@@ -54,9 +54,30 @@ class Settings(BaseSettings):
     ADMIN_NAME: str = "Municipal Administrator"
 
     # -------------------------------------------------------------------- ai
-    # Optional. When absent the ML engine handles everything on its own.
+    # The language model is entirely OPTIONAL. With no key at all, the local
+    # scikit-learn models handle every mandatory capability and the app is fully
+    # functional — an LLM only improves the dispatch summary and enables the
+    # natural-language assistant.
+    #
+    # Two providers are supported. Set whichever key you have:
+    #   ANTHROPIC_API_KEY  -> Claude
+    #   DEEPSEEK_API_KEY   -> DeepSeek (or any OpenAI-compatible endpoint)
+    # If both are set, LLM_PROVIDER decides; "auto" prefers Anthropic.
+    LLM_PROVIDER: str = "auto"  # auto | anthropic | deepseek | openai_compatible | none
+
     ANTHROPIC_API_KEY: str | None = None
-    LLM_MODEL: str = "claude-haiku-4-5"
+    ANTHROPIC_MODEL: str = "claude-haiku-4-5"
+
+    DEEPSEEK_API_KEY: str | None = None
+    DEEPSEEK_MODEL: str = "deepseek-chat"
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+
+    # Generic overrides for any other OpenAI-compatible vendor (Groq, Together,
+    # OpenRouter, a local vLLM/Ollama server). Leave unset to use the DeepSeek values.
+    OPENAI_COMPATIBLE_API_KEY: str | None = None
+    OPENAI_COMPATIBLE_MODEL: str | None = None
+    OPENAI_COMPATIBLE_BASE_URL: str | None = None
+
     LLM_TIMEOUT_SECONDS: float = 20.0
     LLM_MAX_TOKENS: int = 1024
 
@@ -110,10 +131,75 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.ENVIRONMENT.lower() == "production"
 
+    # ------------------------------------------------------ llm provider choice
+    @staticmethod
+    def _clean(value: str | None) -> str:
+        return (value or "").strip()
+
+    @property
+    def anthropic_configured(self) -> bool:
+        return bool(self._clean(self.ANTHROPIC_API_KEY))
+
+    @property
+    def openai_compatible_configured(self) -> bool:
+        return bool(
+            self._clean(self.OPENAI_COMPATIBLE_API_KEY) or self._clean(self.DEEPSEEK_API_KEY)
+        )
+
+    @property
+    def active_llm_provider(self) -> str:
+        """Which LLM provider to use: ``anthropic``, ``openai_compatible`` or ``none``.
+
+        ``auto`` (the default) picks whichever key is present, preferring Anthropic when
+        both are — it uses a strict tool schema, so its output cannot fail validation the
+        way a JSON-mode response can. An explicit setting is honoured even if that
+        provider's key is missing, so a misconfiguration surfaces as "not configured"
+        rather than silently running on the other vendor's bill.
+        """
+        choice = self._clean(self.LLM_PROVIDER).lower() or "auto"
+
+        if choice in {"deepseek", "openai", "openai_compatible"}:
+            return "openai_compatible" if self.openai_compatible_configured else "none"
+        if choice == "anthropic":
+            return "anthropic" if self.anthropic_configured else "none"
+        if choice == "none":
+            return "none"
+
+        # auto
+        if self.anthropic_configured:
+            return "anthropic"
+        if self.openai_compatible_configured:
+            return "openai_compatible"
+        return "none"
+
     @property
     def llm_enabled(self) -> bool:
         """The LLM engine is opt-in: no key means the ML engine runs alone."""
-        return bool(self.ANTHROPIC_API_KEY and self.ANTHROPIC_API_KEY.strip())
+        return self.active_llm_provider != "none"
+
+    # --- resolved settings for the OpenAI-compatible provider -------------------
+    # The generic OPENAI_COMPATIBLE_* variables win when set; otherwise the DeepSeek
+    # defaults apply, so a user with only DEEPSEEK_API_KEY needs no other configuration.
+    @property
+    def LLM_API_KEY(self) -> str:  # noqa: N802 - reads as a setting at the call site
+        return self._clean(self.OPENAI_COMPATIBLE_API_KEY) or self._clean(
+            self.DEEPSEEK_API_KEY
+        )
+
+    @property
+    def LLM_BASE_URL(self) -> str:  # noqa: N802
+        return self._clean(self.OPENAI_COMPATIBLE_BASE_URL) or self.DEEPSEEK_BASE_URL
+
+    @property
+    def LLM_MODEL_NAME(self) -> str:  # noqa: N802
+        return self._clean(self.OPENAI_COMPATIBLE_MODEL) or self.DEEPSEEK_MODEL
+
+    @property
+    def LLM_PROVIDER_LABEL(self) -> str:  # noqa: N802
+        """Human-readable vendor name, shown in the UI and stored on every result."""
+        if self._clean(self.OPENAI_COMPATIBLE_API_KEY):
+            return "openai-compatible"
+        return "deepseek"
 
 
 @lru_cache

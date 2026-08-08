@@ -12,6 +12,9 @@ class AIStatus(BaseModel):
 
     ml_available: bool
     llm_available: bool
+    #: Which vendor is serving the LLM features: "anthropic", "deepseek",
+    #: "openai-compatible", or "none".
+    llm_provider: str = "none"
     active_engine: str
     model_version: str
     categories: list[str]

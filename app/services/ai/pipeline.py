@@ -25,10 +25,29 @@ from app.core.logging import get_logger
 from app.models.enums import AIEngine
 from app.services.ai.base import AIAnalyzer, AIResult
 from app.services.ai.llm_analyzer import LLMAnalyzer
+from app.services.ai.llm_shared import LLMProvider, NullLLM
 from app.services.ai.ml_analyzer import MLAnalyzer
+from app.services.ai.openai_compat_analyzer import OpenAICompatibleAnalyzer
 from app.services.ai.rule_analyzer import RuleAnalyzer
 
 log = get_logger(__name__)
+
+
+def build_llm_provider() -> LLMProvider:
+    """Construct the configured language-model provider.
+
+    Returns a ``NullLLM`` when none is configured, so the pipeline never has to
+    null-check and the app runs identically with no key at all.
+    """
+    provider = settings.active_llm_provider
+
+    if provider == "anthropic":
+        return LLMAnalyzer()
+    if provider == "openai_compatible":
+        return OpenAICompatibleAnalyzer()
+
+    log.info("llm_provider_not_configured", detail="running on the local ML models only")
+    return NullLLM()
 
 
 class AIPipeline(AIAnalyzer):
@@ -43,13 +62,15 @@ class AIPipeline(AIAnalyzer):
     def __init__(
         self,
         ml_analyzer: MLAnalyzer | None = None,
-        llm_analyzer: LLMAnalyzer | None = None,
+        llm_analyzer: LLMProvider | None = None,
         rule_analyzer: RuleAnalyzer | None = None,
         *,
         use_llm_for_summary: bool = True,
     ) -> None:
         self.ml = ml_analyzer if ml_analyzer is not None else MLAnalyzer()
-        self.llm = llm_analyzer if llm_analyzer is not None else LLMAnalyzer()
+        # Which vendor this is (Claude, DeepSeek, none) is decided by configuration in
+        # `build_llm_provider`; the pipeline only depends on the LLMProvider interface.
+        self.llm = llm_analyzer if llm_analyzer is not None else build_llm_provider()
         self.rules = rule_analyzer if rule_analyzer is not None else RuleAnalyzer()
         self._use_llm_for_summary = use_llm_for_summary
 
@@ -59,10 +80,15 @@ class AIPipeline(AIAnalyzer):
         return True
 
     @property
+    def llm_provider(self) -> str:
+        """The configured vendor name, or "none"."""
+        return getattr(self.llm, "provider", "none") if self.llm.available else "none"
+
+    @property
     def active_engine(self) -> str:
         if self.ml.available:
-            return "ml+llm" if self.llm.available else "ml"
-        return "llm" if self.llm.available else "fallback"
+            return f"ml+{self.llm_provider}" if self.llm.available else "ml"
+        return self.llm_provider if self.llm.available else "fallback"
 
     # ------------------------------------------------------------------ analyze
     async def analyze(self, description: str, location: str | None = None) -> AIResult:
@@ -94,10 +120,12 @@ class AIPipeline(AIAnalyzer):
         if self.llm.available:
             try:
                 result = await self.llm.analyze(description, location)
-                result.notes.append("The ML models were unavailable; Claude classified this.")
+                result.notes.append(
+                    f"The ML models were unavailable; {self.llm_provider} classified this."
+                )
                 return result
             except Exception as exc:
-                log.warning("llm_analysis_failed", error=str(exc))
+                log.warning("llm_analysis_failed", provider=self.llm_provider, error=str(exc))
 
         log.warning("falling_back_to_rules")
         return await self.rules.analyze(description, location)
@@ -110,15 +138,20 @@ class AIPipeline(AIAnalyzer):
         Failure here is genuinely harmless — the ML summary is already in place, so a
         timeout or a rate limit costs nothing but a slightly less polished sentence.
         """
+        provider = self.llm_provider
         try:
             summary = await self.llm.summarize(description, result.category, location)
             if summary:
                 result.summary = summary
                 result.engine = AIEngine.HYBRID
-                result.notes.append("Summary written by Claude; labels from the ML models.")
+                result.notes.append(
+                    f"Summary written by {provider}; labels from the ML models."
+                )
         except Exception as exc:
-            log.info("llm_summary_skipped", error=str(exc))
-            result.notes.append("Claude summary unavailable; using the extractive summary.")
+            log.info("llm_summary_skipped", provider=provider, error=str(exc))
+            result.notes.append(
+                f"{provider} summary unavailable; using the extractive summary."
+            )
         return result
 
     # ---------------------------------------------------------------- assistant
@@ -131,9 +164,9 @@ class AIPipeline(AIAnalyzer):
         """
         if self.llm.available:
             try:
-                return await self.llm.answer_question(question, context), "llm"
+                return await self.llm.answer_question(question, context), self.llm_provider
             except Exception as exc:
-                log.warning("assistant_llm_failed", error=str(exc))
+                log.warning("assistant_llm_failed", provider=self.llm_provider, error=str(exc))
 
         return self._describe_context(question, context), "statistics"
 
@@ -149,7 +182,8 @@ class AIPipeline(AIAnalyzer):
         slowest = context.get("slowest_department")
 
         lines = [
-            "The natural-language assistant needs an ANTHROPIC_API_KEY. "
+            "The natural-language assistant needs an API key "
+            "(ANTHROPIC_API_KEY or DEEPSEEK_API_KEY). "
             "Here is the current data that would have been used to answer "
             f'"{question.strip()}":',
             "",
@@ -173,6 +207,7 @@ class AIPipeline(AIAnalyzer):
         return {
             "ml_available": self.ml.available,
             "llm_available": self.llm.available,
+            "llm_provider": self.llm_provider,
             "active_engine": self.active_engine,
             "model_version": ml_info.get("model_version") or settings.MODEL_VERSION,
             "trained_at": ml_info.get("trained_at"),

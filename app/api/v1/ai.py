@@ -39,11 +39,16 @@ async def ai_status(pipeline: PipelineDep) -> AIStatus:
         notes.append("ML artifacts missing — run `python -m app.ml.train`.")
 
     if info["llm_available"]:
-        notes.append("Claude is enabled and writing dispatch summaries.")
+        notes.append(
+            f"Language model enabled via {info['llm_provider']} — writing dispatch "
+            "summaries and answering assistant questions. Category and priority still "
+            "come from the local classifiers, which are calibrated and measurable."
+        )
     else:
         notes.append(
-            "Claude is not configured (no ANTHROPIC_API_KEY). Summaries are extractive "
-            "and the assistant returns a statistics digest — everything else is unaffected."
+            "No language model configured (set ANTHROPIC_API_KEY or DEEPSEEK_API_KEY). "
+            "Summaries are extractive and the assistant returns a statistics digest — "
+            "every other capability is unaffected."
         )
 
     if generalization:
@@ -56,6 +61,7 @@ async def ai_status(pipeline: PipelineDep) -> AIStatus:
     return AIStatus(
         ml_available=info["ml_available"],
         llm_available=info["llm_available"],
+        llm_provider=info["llm_provider"],
         active_engine=info["active_engine"],
         model_version=info["model_version"],
         categories=[category.value for category in ComplaintCategory],

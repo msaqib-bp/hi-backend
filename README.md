@@ -50,20 +50,56 @@ measures the whole pipeline.
 Every prediction is stored on the complaint as `ai_output`, so the UI can show *why* a
 decision was made and an auditor can still read it after the model is retrained.
 
-### The two engines
+### The engines
 
-| | `MLAnalyzer` (default) | `LLMAnalyzer` (optional) |
+| | `MLAnalyzer` (default) | LLM provider (optional) |
 |---|---|---|
-| Technology | scikit-learn, local | Claude API |
+| Technology | scikit-learn, local | Claude **or** DeepSeek |
 | Cost | **Free** | Pay per token |
-| Needs a key | No | Yes (`ANTHROPIC_API_KEY`) |
+| Needs a key | No | Yes — either key works |
 | Handles | Category, priority, summary, duplicates | Better summaries, civic assistant |
 | If it fails | Falls back to keyword rules | Falls back to the ML result |
 
-**The ML engine is the default on purpose.** The Claude API has no free tier, so making it
-mandatory would mean the demo dies the moment a key expires or a quota runs out. The
-classifiers carry every mandatory capability on their own; Claude is an enhancement layer
-on the one field it is genuinely better at — writing the dispatch instruction.
+**The ML engine is the default on purpose.** No LLM API has a meaningful free tier, so
+making one mandatory would mean the demo dies the moment a key expires or a quota runs
+out. The classifiers carry every mandatory capability on their own; the LLM is an
+enhancement layer on the one field it is genuinely better at — writing the dispatch
+instruction.
+
+### Choosing an LLM provider
+
+Two are supported, and the app works identically with either — or with neither.
+
+```bash
+DEEPSEEK_API_KEY=sk-...      # DeepSeek (OpenAI-compatible)
+# or
+ANTHROPIC_API_KEY=sk-ant-... # Claude
+```
+
+`LLM_PROVIDER` defaults to `auto`: it picks whichever key is present, preferring
+Anthropic when both are, because its **strict tool schema** is validated server-side and
+cannot return an invalid label. DeepSeek uses **JSON mode** with the schema and an example
+in the prompt, and the response is validated on the way back — a hallucinated category
+raises rather than being coerced, so the pipeline falls back to the ML result instead of
+filing a complaint under an invented label.
+
+Set `LLM_PROVIDER=deepseek` (or `anthropic`, or `none`) to force one. An explicit choice
+whose key is missing reports "not configured" rather than silently running on the other
+vendor's bill.
+
+The `OpenAICompatibleAnalyzer` is not DeepSeek-specific — point
+`OPENAI_COMPATIBLE_BASE_URL` / `_MODEL` / `_API_KEY` at Groq, Together, OpenRouter or a
+local vLLM/Ollama server and it works unchanged.
+
+**Verify whichever you set:**
+
+```bash
+python -m app.check_llm
+```
+
+It reports which provider was selected and why, then makes three real calls (triage,
+summary, assistant) and prints the results — so a bad key or an exhausted balance surfaces
+there rather than silently degrading every complaint to the extractive summary.
 
 The pipeline degrades in three tiers and **never fails a submission**:
 
@@ -125,7 +161,8 @@ Layers, and what each is responsible for:
 | | `StatisticsService` | Descriptive stats, quartiles, distributions, trends |
 | | `NotificationManager` | Status-change messages |
 | AI | `AIAnalyzer` (ABC) | The contract: `analyze(text, location) -> AIResult` |
-| | `MLAnalyzer` / `LLMAnalyzer` / `RuleAnalyzer` | The three implementations |
+| | `MLAnalyzer` / `LLMAnalyzer` (Claude) / `OpenAICompatibleAnalyzer` (DeepSeek) / `RuleAnalyzer` | The implementations |
+| | `llm_shared.py` | Prompts, schema and result-building shared by both LLM providers, so they cannot drift apart |
 | | `AIPipeline` | Composition + fallback (itself an `AIAnalyzer`) |
 | | `DuplicateDetector` | Cosine similarity over recent open complaints |
 | Data | SQLAlchemy models, `DatabaseManager` | Persistence and sessions |
@@ -326,7 +363,9 @@ Coverage is aimed at the things that actually break:
    - `ADMIN_PASSWORD` — change it before sharing the URL.
    - `CORS_ORIGINS` — your Vercel URL. **Without this the frontend gets CORS errors on
      every request**, which looks like the API being down.
-4. Optionally set `ANTHROPIC_API_KEY` to enable Claude summaries and the assistant.
+4. Optionally set **one** of `DEEPSEEK_API_KEY` or `ANTHROPIC_API_KEY` to enable
+   LLM-written summaries and the natural-language assistant. Leave both blank and the app
+   runs entirely on the local models at zero cost — nothing breaks.
 
 Notes on the free tier:
 
@@ -362,6 +401,10 @@ Stated plainly, because the spec requires explaining what the AI cannot do:
    surfaced for a human to decide.
 6. **Notifications are logged, not sent.** The `NotificationManager` seam is real and
    correct, but wiring a live email/SMS provider was out of scope.
+7. **LLM output is not measured.** The accuracy figures above are for the local
+   classifiers, which have a held-out test set. When an LLM writes the summary there is no
+   equivalent benchmark — it is judged only by reading it. That is another reason the
+   measurable classifiers keep ownership of category and priority.
 
 The dashboard tracks the **admin override rate** — how often a human corrects the model on
 real complaints. After launch, that number is the honest accuracy figure, not the held-out

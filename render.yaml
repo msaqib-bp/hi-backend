@@ -62,9 +62,21 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
 
-      # Optional. Leave unset and the app runs entirely on the local ML models at zero
-      # cost; set it to enable Claude-written summaries and the natural-language
-      # assistant. Nothing breaks either way.
+      # ------------------------------------------------------------------
+      # Language model — OPTIONAL. Leave both keys unset and the app runs
+      # entirely on the local ML models at zero cost; nothing breaks. Setting
+      # one enables LLM-written dispatch summaries and the natural-language
+      # assistant.
+      #
+      # Set DEEPSEEK_API_KEY *or* ANTHROPIC_API_KEY — not both unless you want
+      # Anthropic to win (LLM_PROVIDER=auto prefers it).
+      # ------------------------------------------------------------------
+      - key: LLM_PROVIDER
+        value: auto
+
+      - key: DEEPSEEK_API_KEY
+        sync: false
+
       - key: ANTHROPIC_API_KEY
         sync: false
 
