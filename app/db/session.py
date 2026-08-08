@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl, urlsplit
 
+import certifi
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -58,11 +59,16 @@ def _certificate_verifying_context(database_url: str) -> ssl.SSLContext | None:
         return None
 
     context = ssl.create_default_context()
+    if not context.get_ca_certs():
+        # A slim base image can ship without the ``ca-certificates`` package, leaving
+        # OpenSSL's default verify paths empty. Verification would then reject every
+        # certificate, turning a security improvement into an outage. certifi carries
+        # the same Mozilla root set and is already installed.
+        context.load_verify_locations(cafile=certifi.where())
+
     context.verify_mode = ssl.CERT_REQUIRED
     # verify-ca checks the chain but not the name; verify-full checks both.
-    context.check_hostname = requested.startswith("verify-full") or requested.startswith(
-        "verify_full"
-    )
+    context.check_hostname = requested.startswith(("verify-full", "verify_full"))
     return context
 
 

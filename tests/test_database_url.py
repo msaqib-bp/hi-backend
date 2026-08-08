@@ -157,7 +157,26 @@ class TestCertificateVerification:
             "postgresql+asyncpg://u:p@host/db?ssl=verify-full"
         )
         assert context is not None
-        assert context.get_ca_certs(), "system trust store was not loaded"
+        assert context.get_ca_certs(), "no trust store was loaded"
+
+    def test_certifi_covers_an_image_with_no_system_trust_store(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A slim base image can omit ``ca-certificates`` entirely.
+
+        Verification against an empty trust store rejects *every* certificate, which
+        would turn this hardening into an outage — so an empty store has to fall back
+        rather than proceed.
+        """
+        empty = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        assert not empty.get_ca_certs()
+        monkeypatch.setattr(ssl, "create_default_context", lambda *a, **kw: empty)
+
+        context = _certificate_verifying_context(
+            "postgresql+asyncpg://u:p@host/db?ssl=verify-full"
+        )
+        assert context is not None
+        assert context.get_ca_certs(), "fell back to nothing — every cert would be rejected"
 
     def test_the_context_overrides_the_url(self) -> None:
         """The URL still says ``ssl=verify-full``, and asyncpg would act on that string

@@ -35,3 +35,8 @@ structlog>=24.4,<26.0
 
 # --- HTTP client -------------------------------------------------------------
 httpx>=0.27,<1.0
+
+# Imported directly by app/db/session.py as a CA-bundle fallback, so that
+# sslmode=verify-full still works on an image with no system trust store.
+# Already present transitively via httpx; declared because we import it.
+certifi>=2024.2.2
