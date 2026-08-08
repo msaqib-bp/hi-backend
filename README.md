@@ -421,11 +421,20 @@ implements with `verify_mode = CERT_NONE` — encrypted, but the certificate is 
 checked, so an attacker able to intercept the route could present any certificate at all.
 Changing that one parameter to `sslmode=verify-full` closes the gap and costs nothing;
 Neon's certificate is issued by Let's Encrypt and validates against the system trust
-store. `DatabaseManager` supplies that trust store, because asyncpg otherwise resolves
-`verify-ca`/`verify-full` against `~/.postgresql/root.crt` and raises when the file is
-absent — which on a container it always is, leaving the *strongest* setting as the only
-one that cannot boot. Verified against Neon: all three modes connect, and the verifying
-context rejects hostname mismatches, self-signed and expired certificates.
+store. [`app/db/engine_options.py`](app/db/engine_options.py) supplies that trust store,
+because asyncpg otherwise resolves `verify-ca`/`verify-full` against
+`~/.postgresql/root.crt` and raises when the file is absent — which on a container it
+always is, leaving the *strongest* setting as the only one that cannot boot.
+
+That module exists rather than the logic living in `DatabaseManager` because **Alembic
+builds its own engine**. Sharing `settings.DATABASE_URL` is not sufficient: an
+`SSLContext` is an object, so it cannot travel inside a connection string, and while the
+app connected happily under `verify-full`, `alembic upgrade head` failed — during deploy,
+before the app ever started. Both paths now call `connect_args_for()`.
+
+Verified against Neon: `require`, `verify-ca` and `verify-full` all connect *and*
+migrate, and the verifying context rejects hostname mismatches, self-signed and expired
+certificates.
 
 **Pooled vs direct endpoint.** Neon and Supabase both offer two, and show the pooled one
 first. Either works: [`DatabaseManager`](app/db/session.py) detects the `-pooler` host and

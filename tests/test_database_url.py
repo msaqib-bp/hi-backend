@@ -23,6 +23,7 @@ list, so it keeps telling the truth when the driver is upgraded.
 from __future__ import annotations
 
 import inspect
+import pathlib
 import ssl
 
 import asyncpg
@@ -31,11 +32,12 @@ from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 from sqlalchemy.engine.url import make_url
 
 from app.core.config import Settings, normalise_database_url
-from app.db.session import (
-    DatabaseManager,
-    _certificate_verifying_context,
-    _uses_transaction_pooler,
+from app.db.engine_options import (
+    certificate_verifying_context,
+    connect_args_for,
+    uses_transaction_pooler,
 )
+from app.db.session import DatabaseManager
 
 #: The exact strings these providers put on their dashboards.
 NEON_DIRECT = (
@@ -114,11 +116,11 @@ class TestPoolerDetection:
 
     @pytest.mark.parametrize("url", [NEON_POOLED, SUPABASE_POOLED])
     def test_pooled_endpoints_are_recognised(self, url: str) -> None:
-        assert _uses_transaction_pooler(normalise_database_url(url)) is True
+        assert uses_transaction_pooler(normalise_database_url(url)) is True
 
     @pytest.mark.parametrize("url", [NEON_DIRECT, RENDER_LEGACY])
     def test_direct_endpoints_are_not(self, url: str) -> None:
-        assert _uses_transaction_pooler(normalise_database_url(url)) is False
+        assert uses_transaction_pooler(normalise_database_url(url)) is False
 
 
 class TestCertificateVerification:
@@ -133,10 +135,10 @@ class TestCertificateVerification:
     @pytest.mark.parametrize("mode", ["disable", "prefer", "require"])
     def test_non_verifying_modes_are_left_to_asyncpg(self, mode: str) -> None:
         url = f"postgresql+asyncpg://u:p@host/db?ssl={mode}"
-        assert _certificate_verifying_context(url) is None
+        assert certificate_verifying_context(url) is None
 
     def test_verify_ca_checks_the_chain_but_not_the_hostname(self) -> None:
-        context = _certificate_verifying_context(
+        context = certificate_verifying_context(
             "postgresql+asyncpg://u:p@host/db?ssl=verify-ca"
         )
         assert context is not None
@@ -144,7 +146,7 @@ class TestCertificateVerification:
         assert context.check_hostname is False
 
     def test_verify_full_checks_the_hostname_too(self) -> None:
-        context = _certificate_verifying_context(
+        context = certificate_verifying_context(
             "postgresql+asyncpg://u:p@host/db?ssl=verify-full"
         )
         assert context is not None
@@ -153,7 +155,7 @@ class TestCertificateVerification:
 
     def test_the_context_trusts_a_public_ca(self) -> None:
         """Managed providers use public certificates — Neon's is Let's Encrypt."""
-        context = _certificate_verifying_context(
+        context = certificate_verifying_context(
             "postgresql+asyncpg://u:p@host/db?ssl=verify-full"
         )
         assert context is not None
@@ -172,7 +174,7 @@ class TestCertificateVerification:
         assert not empty.get_ca_certs()
         monkeypatch.setattr(ssl, "create_default_context", lambda *a, **kw: empty)
 
-        context = _certificate_verifying_context(
+        context = certificate_verifying_context(
             "postgresql+asyncpg://u:p@host/db?ssl=verify-full"
         )
         assert context is not None
@@ -201,6 +203,42 @@ class TestCertificateVerification:
         assert manager.is_pooled is True
         assert isinstance(manager.connect_args.get("ssl"), ssl.SSLContext)
         assert manager.connect_args["statement_cache_size"] == 0
+
+
+class TestMigrationsAndAppConnectIdentically:
+    """The application and Alembic open separate engines, and they must agree.
+
+    Sharing ``settings.DATABASE_URL`` is not enough on its own: an ``SSLContext`` is an
+    object, so it cannot ride inside a connection string. When only ``DatabaseManager``
+    supplied one, a ``sslmode=verify-full`` URL let the app connect while
+    ``alembic upgrade head`` failed on asyncpg's missing ``root.crt`` — during deploy,
+    before the app ever started, which is the worst place to discover it.
+    """
+
+    @pytest.mark.parametrize(
+        "url", [NEON_DIRECT, NEON_POOLED, RENDER_LEGACY, SQLITE_DEFAULT]
+    )
+    def test_the_manager_adds_nothing_of_its_own(self, url: str) -> None:
+        """Whatever the manager uses must come from the shared builder, so that Alembic
+        — which calls the builder directly — receives exactly the same thing."""
+        normalised = normalise_database_url(url)
+        assert DatabaseManager(normalised).connect_args == connect_args_for(normalised)
+
+    def test_alembic_env_wires_the_shared_builder(self) -> None:
+        """Read as a contract on the file: the regression this guards is someone
+        constructing Alembic's engine without ``connect_args``, which cannot be caught
+        behaviourally without running a real migration against a TLS database."""
+        env = (
+            pathlib.Path(__file__).resolve().parent.parent / "alembic" / "env.py"
+        ).read_text()
+        assert "connect_args_for" in env, "alembic/env.py no longer uses the shared builder"
+        assert "connect_args=connect_args_for(" in env, (
+            "alembic/env.py imports the builder but does not pass it to its engine"
+        )
+
+    def test_sqlite_needs_no_overrides_either_way(self) -> None:
+        """The local default must stay a plain engine — none of this applies to it."""
+        assert connect_args_for(SQLITE_DEFAULT) == {}
 
 
 class TestEveryKwargIsAcceptedByTheDriver:

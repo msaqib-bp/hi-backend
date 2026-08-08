@@ -8,12 +8,9 @@ development and tests.
 
 from __future__ import annotations
 
-import ssl
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from urllib.parse import parse_qsl, urlsplit
 
-import certifi
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -23,64 +20,10 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.db.engine_options import connect_args_for, uses_transaction_pooler
 from app.models.base import Base
 
 log = get_logger(__name__)
-
-
-def _certificate_verifying_context(database_url: str) -> ssl.SSLContext | None:
-    """Supply the system trust store when the URL asks for certificate verification.
-
-    asyncpg resolves ``verify-ca`` and ``verify-full`` against libpq's default
-    certificate path, ``~/.postgresql/root.crt``, and raises if it is absent — it never
-    falls back to the system trust store::
-
-        ClientConfigurationError: root certificate file
-        "/home/…/.postgresql/root.crt" does not exist
-
-    That file exists on almost no container, so without this the *strongest* setting is
-    the one that fails to boot, leaving ``sslmode=require`` as the only working option —
-    and asyncpg implements ``require`` with ``verify_mode = CERT_NONE``, which encrypts
-    the connection but authenticates nothing. An attacker able to intercept the route
-    could present any certificate at all.
-
-    Every managed provider uses a publicly-trusted certificate (Neon's is Let's Encrypt),
-    so the system store is precisely what is needed to close that gap.
-
-    Returns ``None`` unless verification was requested, leaving asyncpg's own handling of
-    ``disable``/``prefer``/``require`` exactly as it was.
-
-    Not covered: a database behind a *private* CA, whose ``sslrootcert`` this does not
-    read. That fails loudly with a verification error rather than connecting insecurely,
-    and no major hosted provider needs it.
-    """
-    requested = dict(parse_qsl(urlsplit(database_url).query)).get("ssl", "").lower()
-    if requested not in {"verify-ca", "verify_ca", "verify-full", "verify_full"}:
-        return None
-
-    context = ssl.create_default_context()
-    if not context.get_ca_certs():
-        # A slim base image can ship without the ``ca-certificates`` package, leaving
-        # OpenSSL's default verify paths empty. Verification would then reject every
-        # certificate, turning a security improvement into an outage. certifi carries
-        # the same Mozilla root set and is already installed.
-        context.load_verify_locations(cafile=certifi.where())
-
-    context.verify_mode = ssl.CERT_REQUIRED
-    # verify-ca checks the chain but not the name; verify-full checks both.
-    context.check_hostname = requested.startswith(("verify-full", "verify_full"))
-    return context
-
-
-def _uses_transaction_pooler(database_url: str) -> bool:
-    """True for a connection string that points at a PgBouncer transaction pooler.
-
-    Neon and Supabase both expose two endpoints for the same database and show the
-    pooled one first, so it is the string people actually copy. Its hostname carries a
-    ``-pooler`` marker (Neon) or a ``pooler.`` prefix (Supabase).
-    """
-    host = urlsplit(database_url).hostname or ""
-    return "-pooler." in host or host.startswith("pooler.")
 
 
 class DatabaseManager:
@@ -89,7 +32,7 @@ class DatabaseManager:
     def __init__(self, database_url: str, *, echo: bool = False) -> None:
         self._database_url = database_url
         self._is_sqlite = database_url.startswith("sqlite")
-        self._is_pooled = not self._is_sqlite and _uses_transaction_pooler(database_url)
+        self._is_pooled = not self._is_sqlite and uses_transaction_pooler(database_url)
 
         # SQLite ignores pool sizing; hosted Postgres free tiers have a low connection
         # cap, so keep the pool small and recycle before the server drops idle
@@ -98,26 +41,9 @@ class DatabaseManager:
         if not self._is_sqlite:
             engine_kwargs |= {"pool_size": 5, "max_overflow": 5, "pool_recycle": 300}
 
-        connect_args: dict = {}
-
-        verifying_context = _certificate_verifying_context(database_url)
-        if verifying_context is not None:
-            # Overrides the ``ssl=verify-…`` string still in the URL: SQLAlchemy merges
-            # ``connect_args`` over the query parameters, so asyncpg receives the ready
-            # context and never reaches its ``root.crt`` lookup.
-            connect_args["ssl"] = verifying_context
-
-        if self._is_pooled:
-            # Under transaction pooling each statement may land on a different backend.
-            # asyncpg caches server-side prepared statements by name, so the second
-            # query hits a connection that never saw the PREPARE:
-            #   InvalidSQLStatementNameError: prepared statement "__asyncpg_stmt_1__"
-            #   does not exist
-            # Both caches have to go — one is asyncpg's, the other SQLAlchemy's. The
-            # cost is re-planning each statement; the alternative is a database that
-            # fails intermittently under load, which is far worse to debug live.
-            connect_args |= {"statement_cache_size": 0, "prepared_statement_cache_size": 0}
-
+        # Built by the shared module Alembic also uses, so migrations and the
+        # application always connect on identical terms.
+        connect_args = connect_args_for(database_url)
         self._connect_args = connect_args
         if connect_args:
             engine_kwargs["connect_args"] = connect_args

@@ -1,8 +1,13 @@
 """Alembic environment, configured for the async engine.
 
 The database URL comes from ``Settings`` rather than ``alembic.ini`` so migrations use
-exactly the same connection string as the application — including Render's
-``postgres://`` → ``postgresql+asyncpg://`` normalisation.
+exactly the same connection string as the application — including the ``postgres://`` →
+``postgresql+asyncpg://`` normalisation and the translation of a provider's libpq-only
+query parameters.
+
+Alembic builds its *own* engine, so the URL alone is not enough to guarantee the two
+connect identically — anything asyncpg needs that cannot be expressed as a string comes
+from ``app.db.engine_options`` instead.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 import app.models  # noqa: F401,E402  (side-effect import)
 from alembic import context
 from app.core.config import settings
+from app.db.engine_options import connect_args_for
 
 # Importing the models package registers every table on Base.metadata, which is what
 # autogenerate diffs against.
@@ -92,6 +98,12 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Sharing the URL with the application is not sufficient: an SSL context is an
+        # object, so it cannot travel inside a connection string. Without this, a
+        # ``sslmode=verify-full`` URL let the app connect while `alembic upgrade head`
+        # died on asyncpg's missing ``~/.postgresql/root.crt`` — during deploy, before
+        # the application ever started.
+        connect_args=connect_args_for(settings.DATABASE_URL),
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
