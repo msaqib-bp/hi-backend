@@ -356,7 +356,15 @@ Coverage is aimed at the things that actually break:
 
 ### Render (blueprint)
 
-1. Push this directory to its own GitHub repository.
+> ⚠️ **Use "New → Blueprint", not "New → Web Service".** A plain Web Service ignores
+> `render.yaml` entirely and falls back to Render's default start command
+> (`gunicorn your_application.wsgi`), which fails with
+> `ModuleNotFoundError: No module named 'your_application'`. If you see that, or the build
+> log shows Python 3.14 instead of the pinned 3.12.7, or `alembic upgrade head` never ran —
+> the blueprint was not applied. Delete the service and recreate it as a Blueprint.
+
+1. Push this directory to its own GitHub repository (`render.yaml` must be at the repo
+   root — it is).
 2. Render → **New → Blueprint** → select the repo. [`render.yaml`](render.yaml) provisions
    a free Postgres instance and the web service, and runs `alembic upgrade head` on build.
 3. Set the two `sync: false` variables in the dashboard:
@@ -380,6 +388,16 @@ Notes on the free tier:
   wiped on every restart, deleting anything submitted during judging.
 
 A [`Dockerfile`](Dockerfile) is included for Railway / Fly.io / Cloud Run.
+
+### Deploy troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `ModuleNotFoundError: No module named 'your_application'` | Created as a Web Service, so `render.yaml` was ignored | Recreate as a Blueprint |
+| App crashes at startup with a `SECRET_KEY` validation error | `ENVIRONMENT=production` with a short or default signing key | Let Render generate it (`generateValue: true`), or set 32+ random bytes |
+| `/health` reports `"ml_loaded": false` | Model artifacts missing from the repo | They are committed under `app/ml/artifacts/`; check they were not gitignored |
+| Frontend loads but every request fails | `CORS_ORIGINS` does not include the Vercel URL | Set it on Render and redeploy |
+| First request after idle takes ~50s | Free instance cold start | Hit `/health` before demoing |
 
 ---
 
