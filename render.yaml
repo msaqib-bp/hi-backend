@@ -1,0 +1,74 @@
+# Render blueprint — provisions the API and its database together.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> point at this repo.
+# Everything below is free-tier. Two manual steps after the first deploy:
+#   1. Set CORS_ORIGINS to your Vercel URL (see the note on that variable).
+#   2. Change ADMIN_PASSWORD from the default before sharing the link.
+
+databases:
+  - name: civic-db
+    databaseName: civic
+    user: civic
+    plan: free
+
+services:
+  - type: web
+    name: civic-services-api
+    runtime: python
+    plan: free
+    region: oregon
+    branch: main
+
+    # The trained model artifacts are committed to the repo, so no training runs during
+    # deploy — a build-time `python -m app.ml.train` would exceed Render's free-tier
+    # build memory and add minutes to every deploy for an identical result.
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
+
+    # One worker: the free instance has 512 MB and each worker loads its own copy of the
+    # scikit-learn models. Two workers risk an OOM restart mid-demo.
+    startCommand: gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:$PORT --timeout 120 --access-logfile -
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: civic-db
+          property: connectionString
+
+      - key: SECRET_KEY
+        generateValue: true          # Render generates a strong random value
+
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+
+      # ---------------------------------------------------------------------
+      # Set this to your Vercel URL after the frontend is deployed, e.g.
+      #   https://civic-services.vercel.app
+      # Without it the browser blocks every request from the frontend with a
+      # CORS error, which looks like "the API is down" but is not.
+      # ---------------------------------------------------------------------
+      - key: CORS_ORIGINS
+        sync: false
+
+      # Change this before sharing the URL. The app logs a warning if left as-is.
+      - key: ADMIN_EMAIL
+        value: admin@civic.gov
+      - key: ADMIN_PASSWORD
+        sync: false
+
+      # Optional. Leave unset and the app runs entirely on the local ML models at zero
+      # cost; set it to enable Claude-written summaries and the natural-language
+      # assistant. Nothing breaks either way.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # Seeds ~180 demo complaints on first boot so the dashboard has data. Set to
+      # "false" once real complaints exist (it already skips when the table is non-empty).
+      - key: SEED_DEMO_DATA
+        value: "true"

@@ -1,0 +1,40 @@
+{
+  "model_version": "1.0.0",
+  "trained_at": "2026-08-08T18:18:05+00:00",
+  "seed": 42,
+  "training_samples": 4800,
+  "test_samples": 1200,
+  "categories": [
+    "drainage",
+    "electricity",
+    "other",
+    "road",
+    "safety",
+    "waste",
+    "water"
+  ],
+  "priorities": [
+    "critical",
+    "high",
+    "low",
+    "medium"
+  ],
+  "category_accuracy": 1.0,
+  "category_macro_f1": 1.0,
+  "priority_accuracy": 0.9617,
+  "priority_macro_f1": 0.9616,
+  "cv_accuracy": {
+    "category": 1.0,
+    "priority": 0.9529
+  },
+  "train_seconds": 67.4,
+  "sklearn_version": "1.9.0",
+  "generalization": {
+    "category_accuracy": 0.8207,
+    "category_macro_f1": 0.8244,
+    "priority_accuracy": 0.5827,
+    "priority_macro_f1": 0.5851,
+    "priority_within_one_band": 0.8433,
+    "held_out_issue_phrasings": 20
+  }
+}

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Environment — never commit real credentials
+.env
+.env.local
+
+# Local database
+*.db
+*.sqlite3
+
+# OS
+.DS_Store
+
+# NOTE: app/ml/artifacts/*.joblib IS committed on purpose.
+# Render's free tier cannot train during build (memory + time), so the deployed
+# service loads the artifacts straight from the repo. They are ~2 MB total.

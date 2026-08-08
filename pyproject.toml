@@ -1,0 +1,24 @@
+[project]
+name = "civic-services-api"
+version = "1.0.0"
+description = "AI Smart Civic Services — complaint intake, AI triage and analytics API"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+# E501: line length is a formatter concern, not a lint failure. The long lines here are
+# prose inside generated interpretation strings, where breaking them hurts readability
+# more than the overflow does.
+ignore = ["B008", "E501"]  # B008: FastAPI's Depends() in defaults is idiomatic
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/*" = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
