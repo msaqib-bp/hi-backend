@@ -60,9 +60,21 @@ async def lifespan(app: FastAPI):
             ),
         )
 
-    # On SQLite (local dev and tests) create tables directly. Production runs Alembic
-    # migrations in the deploy step, so this is a no-op there beyond a metadata check.
-    await db_manager.create_all()
+    # On SQLite (local dev and tests) create the tables directly, because nothing else
+    # will. On Postgres, skip it: `alembic upgrade head` runs in the deploy step and owns
+    # the schema.
+    #
+    # The reason is correctness, not speed. Creating tables behind Alembic's back leaves
+    # no `alembic_version` row, so the next `upgrade head` tries to create a schema that
+    # already exists and fails — on a database that looks perfectly healthy.
+    #
+    # It does also take a couple of network round trips off the startup path, but that is
+    # a rounding error next to the platform's own cold start; do not mistake this for a
+    # fix for slow boots.
+    if db_manager.is_sqlite:
+        await db_manager.create_all()
+    else:
+        log.info("schema_owned_by_migrations", hint="alembic upgrade head runs at deploy")
 
     pipeline = get_ai_pipeline()
     log.info(
