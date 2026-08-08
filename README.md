@@ -427,3 +427,14 @@ Stated plainly, because the spec requires explaining what the AI cannot do:
 The dashboard tracks the **admin override rate** — how often a human corrects the model on
 real complaints. After launch, that number is the honest accuracy figure, not the held-out
 test score.
+
+### Python version
+
+`.python-version` pins 3.12.7 — the version the test suite and the committed model
+artifacts were built against. Render reads this file for native Python services whether or
+not `render.yaml` is applied, so it holds even if the service was created manually.
+`render.yaml` sets the same value via `PYTHON_VERSION` for belt and braces.
+
+The pin is not cosmetic: the `.joblib` artifacts are unpickled at boot, and keeping the
+runtime identical to the one that produced them removes a whole class of "works locally,
+fails on deploy" problems.
