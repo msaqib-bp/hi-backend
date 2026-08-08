@@ -93,6 +93,11 @@ class AIOutputOut(BaseModel):
     recommended_department: str | None = None
     keywords: list[str] = Field(default_factory=list)
     engine: str | None = None
+    #: Which vendor produced this — "local", "anthropic", "deepseek". Must be declared
+    #: here or Pydantic silently drops it from the response and the UI cannot name the
+    #: engine that made the prediction.
+    provider: str | None = None
+    matched_terms: list[str] = Field(default_factory=list)
     model_version: str | None = None
     processing_ms: float | None = None
     notes: list[str] = Field(default_factory=list)

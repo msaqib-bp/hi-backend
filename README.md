@@ -389,11 +389,32 @@ Notes on the free tier:
 
 A [`Dockerfile`](Dockerfile) is included for Railway / Fly.io / Cloud Run.
 
+### The `your_application` shim
+
+Render's placeholder start command, `gunicorn your_application.wsgi`, is what a service
+gets when it was created as a plain Web Service rather than from `render.yaml`. It fails
+with a `ModuleNotFoundError` that says nothing about the real problem.
+
+Two files make that command work anyway:
+
+- **`gunicorn.conf.py`** — auto-loaded by gunicorn from the working directory. Sets
+  `worker_class` to the uvicorn ASGI worker and binds `0.0.0.0:$PORT`, neither of which
+  the placeholder command supplies. (Explicit `-k`/`-b` flags still win, so the documented
+  start commands are unaffected.)
+- **`your_application/wsgi.py`** — re-exports the real app as `application`.
+
+This is not a degraded path: same server, same ASGI worker, same application object, full
+lifespan support. Only the module path differs, and startup logs a warning naming the
+proper fix. **It does not remove the reason to use a Blueprint** — a manually-created
+service still has no PostgreSQL, so it runs on an ephemeral SQLite file and loses every
+complaint on restart.
+
 ### Deploy troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ModuleNotFoundError: No module named 'your_application'` | Created as a Web Service, so `render.yaml` was ignored | Recreate as a Blueprint |
+| `ModuleNotFoundError: No module named 'your_application'` | Created as a Web Service, so `render.yaml` was ignored | Should no longer occur — `your_application/wsgi.py` resolves the placeholder command (see below). Still worth fixing the start command properly. |
+| Log shows `started_via_compatibility_shim` | Running on Render's placeholder start command | Works, but set the start command or redeploy as a Blueprint — otherwise there is no PostgreSQL and data is lost on every restart |
 | App crashes at startup with a `SECRET_KEY` validation error | `ENVIRONMENT=production` with a short or default signing key | Let Render generate it (`generateValue: true`), or set 32+ random bytes |
 | `/health` reports `"ml_loaded": false` | Model artifacts missing from the repo | They are committed under `app/ml/artifacts/`; check they were not gitignored |
 | Frontend loads but every request fails | `CORS_ORIGINS` does not include the Vercel URL | Set it on Render and redeploy |
